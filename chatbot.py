@@ -7,36 +7,52 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
+# Load .env
 load_dotenv()
 
-def build_bot(pdf_path):
-    loader = PyPDFLoader(pdf_path)
-    docs = loader.load()
+# Step 1: Load PDF
+def load_pdf(file_path):
+    loader = PyPDFLoader(file_path)
+    pages = loader.load()
+    return pages
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = splitter.split_documents(docs)
+# Step 2: Split PDF into chunks
+def split_docs(docs):
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    return splitter.split_documents(docs)
 
+# Step 3: Embed and store in FAISS
+def create_vector_store(chunks):
     embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    vectorstore = FAISS.from_documents(chunks, embeddings)
+    return FAISS.from_documents(chunks, embeddings)
 
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+# Format retriever results into context
+def format_docs(retrieved):
+    return "\n\n".join(doc.page_content for doc in retrieved)
+
+# Main function
+def build_pdf_qa_bot(pdf_path):
+    pages = load_pdf(pdf_path)
+    chunks = split_docs(pages)
+    vector_store = create_vector_store(chunks)
+    retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 3})
 
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template="""
-You are a helpful assistant. Use the context below to answer the question.
+You are an assistant answering questions based on a PDF document.
+Only answer based on the provided context.
 If you don't know, say "I don't know".
 
 Context:
 {context}
 
 Question: {question}
-"""
-    )
+""")
 
     chain = (
         {
-            "context": retriever | RunnableLambda(lambda x: "\n\n".join(d.page_content for d in x)),
+            "context": retriever | RunnableLambda(format_docs),
             "question": RunnablePassthrough()
         }
         | prompt
@@ -45,3 +61,5 @@ Question: {question}
     )
 
     return chain
+
+
